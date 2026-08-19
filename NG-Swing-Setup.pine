@@ -1,0 +1,153 @@
+//@version=5
+// ============================================================
+//  NG SWING SETUP — class method (Wave workshop 19-Aug-2026)
+//  4-HOURLY = TIDE   |   HOURLY = WAVE   |   15-MIN = RIPPLE (entry)
+//
+//  ZONE      : BB top / bottom / median challenge (WAVE ke upar)
+//  STRUCTURE : Lower-High ya Double Top (short) · Higher-Low ya Double Bottom (long)
+//  TIDE      : RSI < 60 + Stoch down + MACD down (short) — long ke liye ulta
+//  Signal pe VERTICAL YELLOW LINE
+//
+//  Chalane ka tareeqa:
+//   • Hourly chart pe: Wave TF = "60" (chart), Tide TF = "240"  → signals dikhenge
+//   • 15-min chart pe (RIPPLE entry ke liye): Wave TF = "60", Tide TF = "240"
+//     → wahi yellow lines, par entry ke liye chhoti candles milengi
+//  Mahaveer · trading-journal/ng-shop/NG-Swing-Setup.pine
+// ============================================================
+indicator("NG Swing — Tide/Wave/Ripple", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ---------------- Inputs ----------------
+grpTF = "Timeframes"
+waveTf  = input.timeframe("60",  "WAVE (setup banta hai yahan)",  group=grpTF)
+tideTf  = input.timeframe("240", "TIDE (confirmation)",           group=grpTF)
+
+grpZ = "Zone (Bollinger) — WAVE pe"
+bbLen   = input.int(20,   "BB length", group=grpZ)
+bbMult  = input.float(2.0,"BB mult",   group=grpZ, step=0.1)
+chalBars= input.int(12,   "BB challenge kitne bars tak valid", group=grpZ)
+
+grpS = "Structure — WAVE pe"
+pivLen  = input.int(3,    "Pivot left/right bars", group=grpS)
+tol     = input.float(0.2,"Lower-High / Higher-Low tolerance %", group=grpS, step=0.1)
+
+grpC = "TIDE filters"
+rsiShort= input.int(60,   "SHORT: tide RSI iske neeche", group=grpC)
+rsiLong = input.int(40,   "LONG: tide RSI iske upar",    group=grpC)
+useStoch= input.bool(true,"Tide Stochastic filter", group=grpC)
+useMacd = input.bool(true,"Tide MACD filter",       group=grpC)
+
+grpT = "Trade side"
+doLong  = input.bool(true, "LONG signals",  group=grpT)
+doShort = input.bool(true, "SHORT signals", group=grpT)
+cooldown= input.int(4, "Do signals ke beech min WAVE bars", group=grpT)
+
+grpV = "Display"
+lineCol = input.color(color.yellow, "Vertical line colour", group=grpV)
+showBB  = input.bool(true, "Wave ki Bollinger Bands dikhao", group=grpV)
+showLbl = input.bool(true, "L / S label dikhao", group=grpV)
+
+// ---------------- WAVE calculations (hourly) ----------------
+f_wave() =>
+    basis  = ta.sma(close, bbLen)
+    dev    = bbMult * ta.stdev(close, bbLen)
+    up     = basis + dev
+    lo     = basis - dev
+    bu     = ta.barssince(high >= up)
+    bd     = ta.barssince(low  <= lo)
+    cUp    = not na(bu) and bu <= chalBars
+    cDn    = not na(bd) and bd <= chalBars
+    ph     = ta.pivothigh(high, pivLen, pivLen)
+    pl     = ta.pivotlow(low,  pivLen, pivLen)
+    var float ph1 = na
+    var float ph2 = na
+    var float pl1 = na
+    var float pl2 = na
+    if not na(ph)
+        ph2 := ph1
+        ph1 := ph
+    if not na(pl)
+        pl2 := pl1
+        pl1 := pl
+    lh     = not na(ph1) and not na(ph2) and ph1 <= ph2 * (1 + tol/100)   // Lower High ya Double Top
+    hl     = not na(pl1) and not na(pl2) and pl1 >= pl2 * (1 - tol/100)   // Higher Low ya Double Bottom
+    bear   = close < open and close < basis
+    bull   = close > open and close > basis
+    [basis, up, lo, cUp, cDn, lh, hl, bear, bull]
+
+[wBasis, wUp, wLo, wChalUp, wChalDn, wLH, wHL, wBear, wBull] =
+     request.security(syminfo.tickerid, waveTf, f_wave(), lookahead=barmerge.lookahead_off)
+
+plot(showBB ? wUp    : na, "Wave BB upper",  color=color.new(color.gray, 55))
+plot(showBB ? wBasis : na, "Wave BB median", color=color.new(color.gray, 30))
+plot(showBB ? wLo    : na, "Wave BB lower",  color=color.new(color.gray, 55))
+
+// ---------------- TIDE calculations (4-hourly) ----------------
+f_tide() =>
+    r  = ta.rsi(close, 14)
+    k  = ta.stoch(close, high, low, 14)
+    d  = ta.sma(k, 3)
+    m  = ta.ema(close, 12) - ta.ema(close, 26)
+    s  = ta.ema(m, 9)
+    [r, k, d, m, s]
+
+[tRsi, tK, tD, tM, tS] = request.security(syminfo.tickerid, tideTf, f_tide(), lookahead=barmerge.lookahead_off)
+
+stochDn = not useStoch or tK < tD
+stochUp = not useStoch or tK > tD
+macdDn  = not useMacd  or tM < tS
+macdUp  = not useMacd  or tM > tS
+
+tideShortOk = tRsi < rsiShort and stochDn and macdDn
+tideLongOk  = tRsi > rsiLong  and stochUp and macdUp
+
+// ---------------- Signals ----------------
+rawShort = doShort and wChalUp and wLH and wBear and tideShortOk
+rawLong  = doLong  and wChalDn and wHL and wBull and tideLongOk
+
+// naya signal tabhi jab wave bar badla ho (repeat suppress)
+waveChanged = ta.change(time(waveTf)) != 0
+firstShort = rawShort and (waveChanged or not rawShort[1])
+firstLong  = rawLong  and (waveChanged or not rawLong[1])
+
+var int lastBar = -10000
+minBars = cooldown * (timeframe.in_seconds(waveTf) / timeframe.in_seconds(timeframe.period))
+fresh = bar_index - lastBar >= minBars
+
+sigShort = firstShort and fresh and not rawShort[1]
+sigLong  = firstLong  and fresh and not rawLong[1] and not sigShort
+if sigShort or sigLong
+    lastBar := bar_index
+
+// ---------------- Vertical lines + labels ----------------
+if sigShort or sigLong
+    line.new(bar_index, low, bar_index, high, extend=extend.both, color=lineCol, width=1)
+    if showLbl
+        label.new(bar_index, sigShort ? high : low,
+             text      = sigShort ? "S" : "L",
+             yloc      = sigShort ? yloc.abovebar : yloc.belowbar,
+             style     = sigShort ? label.style_label_down : label.style_label_up,
+             color     = sigShort ? color.new(color.red, 25) : color.new(color.green, 25),
+             textcolor = color.white, size = size.tiny)
+
+plotshape(sigShort, title="SHORT", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0),   size=size.tiny)
+plotshape(sigLong,  title="LONG",  style=shape.triangleup,   location=location.belowbar, color=color.new(color.green, 0), size=size.tiny)
+
+alertcondition(sigShort, "NG Swing SHORT", "NG swing — SHORT signal (wave + tide confirmed)")
+alertcondition(sigLong,  "NG Swing LONG",  "NG swing — LONG signal (wave + tide confirmed)")
+
+// ---------------- Status table ----------------
+var table t = table.new(position.top_right, 2, 6, border_width=1)
+if barstate.islast
+    table.cell(t, 0, 0, "TIDE " + tideTf, text_size=size.tiny, text_color=color.gray)
+    table.cell(t, 1, 0, tideLongOk ? "LONG ok" : tideShortOk ? "SHORT ok" : "mixed", text_size=size.tiny,
+               text_color = tideLongOk ? color.green : tideShortOk ? color.red : color.gray)
+    table.cell(t, 0, 1, "  RSI",   text_size=size.tiny, text_color=color.gray)
+    table.cell(t, 1, 1, str.tostring(tRsi, "#.0"), text_size=size.tiny, text_color=color.silver)
+    table.cell(t, 0, 2, "  Stoch / MACD", text_size=size.tiny, text_color=color.gray)
+    table.cell(t, 1, 2, (tK < tD ? "dn" : "up") + " / " + (tM < tS ? "dn" : "up"), text_size=size.tiny, text_color=color.silver)
+    table.cell(t, 0, 3, "WAVE " + waveTf, text_size=size.tiny, text_color=color.gray)
+    table.cell(t, 1, 3, wChalUp ? "BB upper" : wChalDn ? "BB lower" : "-", text_size=size.tiny, text_color=color.orange)
+    table.cell(t, 0, 4, "  Structure", text_size=size.tiny, text_color=color.gray)
+    table.cell(t, 1, 4, wLH and wHL ? "LH+HL" : wLH ? "Lower High" : wHL ? "Higher Low" : "-", text_size=size.tiny, text_color=color.orange)
+    table.cell(t, 0, 5, "Chart (ripple)", text_size=size.tiny, text_color=color.gray)
+    table.cell(t, 1, 5, timeframe.period, text_size=size.tiny, text_color=color.silver)
