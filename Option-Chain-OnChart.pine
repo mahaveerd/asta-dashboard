@@ -1,0 +1,222 @@
+//@version=5
+// ============================================================
+//  OPTION CHAIN — ON CHART  (Mahaveer)
+//  9 strikes (ATM ±4) ka CE/PE OI + LTP ek table mein, chart pe hi.
+//  + Max-OI walls ki horizontal lines (CE wall = resistance, PE wall = support)
+//  + PCR + SmartMoney levels (R2/R1/MLL/S1/S2) manual input se
+//
+//  ⚠ Pine limits: max 40 request.security calls · ATM strike INPUT dena padta hai
+//    (Pine live price se symbol name nahi bana sakta)
+//  ⚠ Agar OI column me "-" aaye = TradingView us symbol ka OI nahi deta →
+//    "MANUAL OI" section me pipeline ke numbers daal do (roz auto-generate ho jayenge)
+// ============================================================
+indicator("Option Chain — On Chart", overlay=true, max_lines_count=30, max_labels_count=30)
+
+// ---------------- Symbol builder ----------------
+gS = "Symbol"
+exch   = input.string("NSE",    "Exchange", options=["NSE","BSE"], group=gS)
+root   = input.string("NIFTY",  "Root (NIFTY / BANKNIFTY / SENSEX)", group=gS)
+expiry = input.string("260825", "Expiry YYMMDD", tooltip="25-Aug-2026 = 260825", group=gS)
+atm    = input.int(24200,       "ATM strike (roz update karo)", step=50, group=gS)
+stp    = input.int(50,          "Strike step (NIFTY 50 · SENSEX 100)", group=gS)
+
+gD = "Display"
+showLtp = input.bool(true, "LTP columns dikhao", group=gD)
+tblPos  = input.string("Top Right", "Table position", options=["Top Right","Top Left","Bottom Right","Bottom Left","Middle Right"], group=gD)
+txtSize = input.string("Tiny", "Text size", options=["Tiny","Small","Normal"], group=gD)
+showWall= input.bool(true, "Max-OI wall lines chart pe", group=gD)
+
+gM = "Manual OI (agar live OI na mile — pipeline se bharo)"
+useManual = input.bool(false, "Manual OI mode ON", group=gM)
+mCE = input.string("", "CE OI (ATM-4 → ATM+4, comma se)", tooltip="e.g. 12.5,18.2,25.1,31.0,44.8,29.3,20.1,15.7,9.2", group=gM)
+mPE = input.string("", "PE OI (ATM-4 → ATM+4, comma se)", group=gM)
+
+gL = "SmartMoney levels (mere pipeline se)"
+showLvl = input.bool(true, "Levels dikhao", group=gL)
+lR2 = input.float(0, "R2  — CE BEP (no-benefit line)", group=gL)
+lR1 = input.float(0, "R1  — CE wall", group=gL)
+lML = input.float(0, "MLL — min-loss level", group=gL)
+lS1 = input.float(0, "S1  — PE wall", group=gL)
+lS2 = input.float(0, "S2  — PE BEP", group=gL)
+
+// ---------------- helpers ----------------
+f_ce(k) => exch + ":" + root + expiry + "C" + str.tostring(k)
+f_pe(k) => exch + ":" + root + expiry + "P" + str.tostring(k)
+
+k_4 = atm - 4*stp, k_3 = atm - 3*stp, k_2 = atm - 2*stp, k_1 = atm - stp
+k0  = atm
+k1  = atm + stp, k2 = atm + 2*stp, k3 = atm + 3*stp, k4 = atm + 4*stp
+
+// --- CE OI (9 calls) ---
+ce_oi_4 = request.security(f_ce(k_4), timeframe.period, open_interest, ignore_invalid_symbol=true)
+ce_oi_3 = request.security(f_ce(k_3), timeframe.period, open_interest, ignore_invalid_symbol=true)
+ce_oi_2 = request.security(f_ce(k_2), timeframe.period, open_interest, ignore_invalid_symbol=true)
+ce_oi_1 = request.security(f_ce(k_1), timeframe.period, open_interest, ignore_invalid_symbol=true)
+ce_oi0  = request.security(f_ce(k0),  timeframe.period, open_interest, ignore_invalid_symbol=true)
+ce_oi1  = request.security(f_ce(k1),  timeframe.period, open_interest, ignore_invalid_symbol=true)
+ce_oi2  = request.security(f_ce(k2),  timeframe.period, open_interest, ignore_invalid_symbol=true)
+ce_oi3  = request.security(f_ce(k3),  timeframe.period, open_interest, ignore_invalid_symbol=true)
+ce_oi4  = request.security(f_ce(k4),  timeframe.period, open_interest, ignore_invalid_symbol=true)
+
+// --- PE OI (9 calls) ---
+pe_oi_4 = request.security(f_pe(k_4), timeframe.period, open_interest, ignore_invalid_symbol=true)
+pe_oi_3 = request.security(f_pe(k_3), timeframe.period, open_interest, ignore_invalid_symbol=true)
+pe_oi_2 = request.security(f_pe(k_2), timeframe.period, open_interest, ignore_invalid_symbol=true)
+pe_oi_1 = request.security(f_pe(k_1), timeframe.period, open_interest, ignore_invalid_symbol=true)
+pe_oi0  = request.security(f_pe(k0),  timeframe.period, open_interest, ignore_invalid_symbol=true)
+pe_oi1  = request.security(f_pe(k1),  timeframe.period, open_interest, ignore_invalid_symbol=true)
+pe_oi2  = request.security(f_pe(k2),  timeframe.period, open_interest, ignore_invalid_symbol=true)
+pe_oi3  = request.security(f_pe(k3),  timeframe.period, open_interest, ignore_invalid_symbol=true)
+pe_oi4  = request.security(f_pe(k4),  timeframe.period, open_interest, ignore_invalid_symbol=true)
+
+// --- LTP (18 calls) → total 36, limit 40 ke andar ---
+ce_p_4 = request.security(f_ce(k_4), timeframe.period, close, ignore_invalid_symbol=true)
+ce_p_3 = request.security(f_ce(k_3), timeframe.period, close, ignore_invalid_symbol=true)
+ce_p_2 = request.security(f_ce(k_2), timeframe.period, close, ignore_invalid_symbol=true)
+ce_p_1 = request.security(f_ce(k_1), timeframe.period, close, ignore_invalid_symbol=true)
+ce_p0  = request.security(f_ce(k0),  timeframe.period, close, ignore_invalid_symbol=true)
+ce_p1  = request.security(f_ce(k1),  timeframe.period, close, ignore_invalid_symbol=true)
+ce_p2  = request.security(f_ce(k2),  timeframe.period, close, ignore_invalid_symbol=true)
+ce_p3  = request.security(f_ce(k3),  timeframe.period, close, ignore_invalid_symbol=true)
+ce_p4  = request.security(f_ce(k4),  timeframe.period, close, ignore_invalid_symbol=true)
+pe_p_4 = request.security(f_pe(k_4), timeframe.period, close, ignore_invalid_symbol=true)
+pe_p_3 = request.security(f_pe(k_3), timeframe.period, close, ignore_invalid_symbol=true)
+pe_p_2 = request.security(f_pe(k_2), timeframe.period, close, ignore_invalid_symbol=true)
+pe_p_1 = request.security(f_pe(k_1), timeframe.period, close, ignore_invalid_symbol=true)
+pe_p0  = request.security(f_pe(k0),  timeframe.period, close, ignore_invalid_symbol=true)
+pe_p1  = request.security(f_pe(k1),  timeframe.period, close, ignore_invalid_symbol=true)
+pe_p2  = request.security(f_pe(k2),  timeframe.period, close, ignore_invalid_symbol=true)
+pe_p3  = request.security(f_pe(k3),  timeframe.period, close, ignore_invalid_symbol=true)
+pe_p4  = request.security(f_pe(k4),  timeframe.period, close, ignore_invalid_symbol=true)
+
+// ---------------- arrays ----------------
+f_manual(csv, idx) =>
+    parts = str.split(csv, ",")
+    array.size(parts) > idx ? str.tonumber(array.get(parts, idx)) : na
+
+var float[] KS = array.new_float(9)
+var float[] CO = array.new_float(9)
+var float[] PO = array.new_float(9)
+var float[] CP = array.new_float(9)
+var float[] PP = array.new_float(9)
+
+array.set(KS,0,k_4), array.set(KS,1,k_3), array.set(KS,2,k_2), array.set(KS,3,k_1), array.set(KS,4,k0)
+array.set(KS,5,k1),  array.set(KS,6,k2),  array.set(KS,7,k3),  array.set(KS,8,k4)
+
+array.set(CO,0, useManual ? f_manual(mCE,0) : ce_oi_4), array.set(CO,1, useManual ? f_manual(mCE,1) : ce_oi_3)
+array.set(CO,2, useManual ? f_manual(mCE,2) : ce_oi_2), array.set(CO,3, useManual ? f_manual(mCE,3) : ce_oi_1)
+array.set(CO,4, useManual ? f_manual(mCE,4) : ce_oi0),  array.set(CO,5, useManual ? f_manual(mCE,5) : ce_oi1)
+array.set(CO,6, useManual ? f_manual(mCE,6) : ce_oi2),  array.set(CO,7, useManual ? f_manual(mCE,7) : ce_oi3)
+array.set(CO,8, useManual ? f_manual(mCE,8) : ce_oi4)
+
+array.set(PO,0, useManual ? f_manual(mPE,0) : pe_oi_4), array.set(PO,1, useManual ? f_manual(mPE,1) : pe_oi_3)
+array.set(PO,2, useManual ? f_manual(mPE,2) : pe_oi_2), array.set(PO,3, useManual ? f_manual(mPE,3) : pe_oi_1)
+array.set(PO,4, useManual ? f_manual(mPE,4) : pe_oi0),  array.set(PO,5, useManual ? f_manual(mPE,5) : pe_oi1)
+array.set(PO,6, useManual ? f_manual(mPE,6) : pe_oi2),  array.set(PO,7, useManual ? f_manual(mPE,7) : pe_oi3)
+array.set(PO,8, useManual ? f_manual(mPE,8) : pe_oi4)
+
+array.set(CP,0,ce_p_4), array.set(CP,1,ce_p_3), array.set(CP,2,ce_p_2), array.set(CP,3,ce_p_1), array.set(CP,4,ce_p0)
+array.set(CP,5,ce_p1),  array.set(CP,6,ce_p2),  array.set(CP,7,ce_p3),  array.set(CP,8,ce_p4)
+array.set(PP,0,pe_p_4), array.set(PP,1,pe_p_3), array.set(PP,2,pe_p_2), array.set(PP,3,pe_p_1), array.set(PP,4,pe_p0)
+array.set(PP,5,pe_p1),  array.set(PP,6,pe_p2),  array.set(PP,7,pe_p3),  array.set(PP,8,pe_p4)
+
+// max OI walls
+f_maxIdx(arr) =>
+    int bi = -1
+    float bv = -1.0
+    for i = 0 to array.size(arr) - 1
+        vv = array.get(arr, i)
+        if not na(vv) and vv > bv
+            bv := vv
+            bi := i
+    bi
+ceMax = f_maxIdx(CO)
+peMax = f_maxIdx(PO)
+
+f_sum(arr) =>
+    float s = 0.0
+    for i = 0 to array.size(arr) - 1
+        vv = array.get(arr, i)
+        s := s + (na(vv) ? 0.0 : vv)
+    s
+pcr = f_sum(CO) > 0 ? f_sum(PO) / f_sum(CO) : na
+
+// ---------------- table ----------------
+f_pos(s) => s == "Top Left" ? position.top_left : s == "Bottom Right" ? position.bottom_right :
+            s == "Bottom Left" ? position.bottom_left : s == "Middle Right" ? position.middle_right : position.top_right
+f_size(s) => s == "Small" ? size.small : s == "Normal" ? size.normal : size.tiny
+f_fmt(x) => na(x) ? "-" : x >= 100000 ? str.tostring(x/100000, "#.##") + "L" : x >= 1000 ? str.tostring(x/1000, "#.#") + "k" : str.tostring(x, "#.##")
+
+ncol = showLtp ? 5 : 3
+var table t = table.new(f_pos(tblPos), ncol, 12, border_width=1, frame_width=1, frame_color=color.new(color.gray, 60))
+
+if barstate.islast
+    table.clear(t, 0, 0, ncol - 1, 11)
+    hdrBg = color.new(color.gray, 80)
+    ci = 0
+    table.cell(t, ci, 0, "CE OI", text_color=color.red,   text_size=f_size(txtSize), bgcolor=hdrBg)
+    ci += 1
+    if showLtp
+        table.cell(t, ci, 0, "CE LTP", text_color=color.red, text_size=f_size(txtSize), bgcolor=hdrBg)
+        ci += 1
+    table.cell(t, ci, 0, "STRIKE", text_color=color.white, text_size=f_size(txtSize), bgcolor=color.new(color.blue, 55))
+    ci += 1
+    if showLtp
+        table.cell(t, ci, 0, "PE LTP", text_color=color.green, text_size=f_size(txtSize), bgcolor=hdrBg)
+        ci += 1
+    table.cell(t, ci, 0, "PE OI", text_color=color.green, text_size=f_size(txtSize), bgcolor=hdrBg)
+
+    for i = 0 to 8
+        r = i + 1
+        isAtm = i == 4
+        kBg = isAtm ? color.new(color.blue, 45) : color.new(color.gray, 88)
+        c2 = 0
+        table.cell(t, c2, r, f_fmt(array.get(CO, i)),
+             text_color = i == ceMax ? color.white : color.new(color.red, 20),
+             bgcolor    = i == ceMax ? color.new(color.red, 35) : color.new(color.red, 92),
+             text_size  = f_size(txtSize))
+        c2 += 1
+        if showLtp
+            table.cell(t, c2, r, f_fmt(array.get(CP, i)), text_color=color.new(color.red, 35), text_size=f_size(txtSize))
+            c2 += 1
+        table.cell(t, c2, r, str.tostring(array.get(KS, i), "#"), text_color=color.white, bgcolor=kBg, text_size=f_size(txtSize))
+        c2 += 1
+        if showLtp
+            table.cell(t, c2, r, f_fmt(array.get(PP, i)), text_color=color.new(color.green, 35), text_size=f_size(txtSize))
+            c2 += 1
+        table.cell(t, c2, r, f_fmt(array.get(PO, i)),
+             text_color = i == peMax ? color.white : color.new(color.green, 20),
+             bgcolor    = i == peMax ? color.new(color.green, 35) : color.new(color.green, 92),
+             text_size  = f_size(txtSize))
+
+    table.cell(t, 0, 10, "PCR", text_color=color.gray, text_size=f_size(txtSize))
+    table.cell(t, ncol - 1, 10, na(pcr) ? "-" : str.tostring(pcr, "#.##"),
+         text_color = na(pcr) ? color.gray : pcr > 1 ? color.green : color.red, text_size=f_size(txtSize))
+    table.cell(t, 0, 11, useManual ? "manual" : "live", text_color=color.new(color.gray, 40), text_size=size.tiny)
+    table.cell(t, ncol - 1, 11, root + " " + expiry, text_color=color.new(color.gray, 40), text_size=size.tiny)
+
+// ---------------- wall lines + levels ----------------
+var line ceLine = na, var line peLine = na
+var label ceLbl = na, var label peLbl = na
+if barstate.islast and showWall
+    line.delete(ceLine), line.delete(peLine), label.delete(ceLbl), label.delete(peLbl)
+    if ceMax >= 0
+        cw = array.get(KS, ceMax)
+        ceLine := line.new(bar_index - 200, cw, bar_index + 20, cw, color=color.new(color.red, 20), width=2, extend=extend.right)
+        ceLbl  := label.new(bar_index + 20, cw, "CE wall " + str.tostring(cw, "#"), style=label.style_label_left,
+                            color=color.new(color.red, 25), textcolor=color.white, size=size.tiny)
+    if peMax >= 0
+        pw = array.get(KS, peMax)
+        peLine := line.new(bar_index - 200, pw, bar_index + 20, pw, color=color.new(color.green, 20), width=2, extend=extend.right)
+        peLbl  := label.new(bar_index + 20, pw, "PE wall " + str.tostring(pw, "#"), style=label.style_label_left,
+                            color=color.new(color.green, 25), textcolor=color.white, size=size.tiny)
+
+plot(showLvl and lR2 > 0 ? lR2 : na, "R2 (CE BEP)", color=color.new(color.red, 30),   style=plot.style_linebr, linewidth=1)
+plot(showLvl and lR1 > 0 ? lR1 : na, "R1 (CE wall)", color=color.new(color.red, 55),  style=plot.style_linebr, linewidth=2)
+plot(showLvl and lML > 0 ? lML : na, "MLL",          color=color.new(color.orange, 30),style=plot.style_linebr, linewidth=1)
+plot(showLvl and lS1 > 0 ? lS1 : na, "S1 (PE wall)", color=color.new(color.green, 55), style=plot.style_linebr, linewidth=2)
+plot(showLvl and lS2 > 0 ? lS2 : na, "S2 (PE BEP)",  color=color.new(color.green, 30), style=plot.style_linebr, linewidth=1)
+
+// alerts
+alertcondition(showLvl and lR1 > 0 and ta.crossover(close, lR1),  "R1 cross UP",   "Price ne CE wall (R1) cross kiya")
+alertcondition(showLvl and lS1 > 0 and ta.crossunder(close, lS1), "S1 cross DOWN", "Price ne PE wall (S1) todha")
